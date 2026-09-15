@@ -44,17 +44,23 @@ Status: interviewing; implementation has not started.
 
 ### Accepted direction from round four
 
-- Linux first, distributed as a single executable with built-in fuzzy search and configuration editing. Debug tools for optional source discovery are optional dependencies.
+- Linux first, with built-in fuzzy search and configuration editing. The original single-executable packaging choice is superseded by the later explicit Python-with-uv selection.
 - Enter opens a boolean editor with yes/no choices; arrows or Space change the selection, Enter saves, Esc cancels. No immediate list-row toggle/save.
 - After saving, return to the filtered list while preserving search and selection. Report the saved value and known activation requirements.
 - Detect external file changes and stop a conflicting save, asking to reload. Preserve comments/formatting, write atomically, and retain the previous file as a recovery backup.
 
+### Accepted compatibility policy (Q17)
+
+- Use installed-library metadata for validated layouts. Fall back to paramdump where available; otherwise offer clearly limited offline editing of existing settings. Never guess an unknown library layout.
+- See [ADR 0001](adr/0001-installed-library-metadata.md) for the trade-off.
+
 ### Next decision frontier
 
-- Choose a compatibility policy for installed-library metadata extraction and unsupported layouts, informed by the successful prototype.
-- Implementation stack and detailed compatibility strategy depend on that choice.
+- Review the [consolidated design](design.md) and confirm shared understanding. The user selected Python with uv; Textual and pyelftools are the corresponding implementation proposal.
 
-Recommendations on these questions are not yet accepted.
+### Implementation language clarification
+
+The user requested Python, then explicitly specified Python with uv. Adopt Python CLI package distribution through uv. This replaces the unaccepted Rust proposal and the earlier native single-executable packaging direction. Preserve minimal external-tool dependencies and the subprocess metadata boundary.
 
 ## Pending fact discovery
 
@@ -109,9 +115,9 @@ Source discovery through DWARF is therefore viable as optional enrichment. Paths
 
 No database-free catalog CLI was found in the bounded caller search for this branch. `paramdump` requires a database name and calls `db_restart` before dumping (`src/executables/util_cs.c:2323–2332,2404–2411`). An environment-triggered dump exists only under `#if 0` (`src/base/system_parameter.c:6465–6471`).
 
-The installed `libcubrid.so.11.5` exports `prm_Def`, `sysprm_dump_parameters`, and initialization functions, as observed with `nm -D`. A subprocess helper may be able to extract compiled metadata without opening a database. This is unproven: the registry structure is internal, its header is not installed publicly, initialization has substantial side effects, and client/server build differences require checking (`src/base/system_parameter.h:726–739`; `src/base/system_parameter.c:1059,1065–1069,6298–6555`). No library initialization or extraction has been executed. A successful test against this build alone would not establish general compatibility.
+The installed `libcubrid.so.11.5` exports `prm_Def`, `sysprm_dump_parameters`, and initialization functions, as observed with `nm -D`. The initial source investigation identified a plausible subprocess extractor and these risks: the registry structure is internal, its header is not installed publicly, initialization has substantial side effects, and client/server build differences matter (`src/base/system_parameter.h:726–739`; `src/base/system_parameter.c:1059,1065–1069,6298–6555`). The later prototype established extraction for tested artifacts without calling CUBRID initialization functions; it did not establish general compatibility.
 
-Offline editing is accepted; silently replacing a complete catalog with only existing keys is not accepted. A previously collected catalog can help repeat use, but cannot solve a first run against an unknown build by itself. This remains an explicit feasibility decision.
+Q17 explicitly accepted limited existing-setting editing for unsupported layouts when a live dump is also unavailable. A previously collected catalog could help repeat use, but cannot solve a first run against an unknown build by itself.
 
 Individual `CUBRID_<UPPERCASE_PARAMETER_NAME>` environment variables can override file values (`src/base/system_parameter.c:7371–7396`). The TUI's environment is not proof of the running server's environment.
 
@@ -123,7 +129,7 @@ Q16 accepted a bounded executable prototype of installed-library metadata extrac
 
 ## Interview checkpoint
 
-Rounds one through four answered, Q16 prototype completed. Next: decide compatibility/fallback policy for the metadata extractor, then settle implementation choices and confirm the complete design. No production implementation has started.
+Rounds one through four answered, Q16 prototype completed, Q17 compatibility policy accepted, Python with uv selected. Consolidated design is ready for final review. No production implementation has started.
 
 ## References supplied by the user
 

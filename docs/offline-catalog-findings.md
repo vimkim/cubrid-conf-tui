@@ -36,6 +36,6 @@ These are registry counts, not counts of editable common-section parameters. Nam
 
 The script uses Python, readelf, bubblewrap, and strace as experiment tooling. Product runtime dependencies remain a separate implementation choice. The main branch contains design records only.
 
-## Pending decision
+## Accepted decision (Q17)
 
-Recommended: a subprocess metadata extractor for validated layouts, retaining installed-only operation and paramdump for runtime observations. For unsupported layouts, explicitly report offline catalog limitations and offer available configuration/live-dump information. That fallback policy is a proposal awaiting the user's decision, not an accepted reduction of offline scope.
+Use a subprocess metadata extractor for validated layouts, retaining installed-only operation and paramdump for runtime observations. For unsupported layouts, explicitly report offline catalog limitations and offer available configuration/live-dump information. The user accepted this policy, including limited offline editing of existing settings when neither supported metadata nor a live dump is available. See [ADR 0001](adr/0001-installed-library-metadata.md).

@@ -34,3 +34,9 @@ Removal of a parameter's explicit common assignment, allowing other applicable c
 
 **Limited validation**:
 A validation result where basic input checks pass but some parameter-specific constraints are unknown. Saving is permitted without claiming that CUBRID will accept the value.
+
+**Offline catalog**:
+The available parameter names and metadata obtained without opening or connecting to a database. It does not contain observed live client or server values.
+
+**Limited offline editing**:
+Editing existing configured settings when a complete offline catalog and live parameter dump are unavailable. Missing settings and metadata are not inferred.

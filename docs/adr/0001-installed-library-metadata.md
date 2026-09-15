@@ -1,0 +1,3 @@
+# Extract metadata from validated installed libraries
+
+To support developer builds and offline editing without requiring a source checkout, use a subprocess to extract compiled parameter metadata from validated installed-library layouts, preserving each library's role and provenance. The prototype established feasibility for the tested debug and release artifacts; the user accepted an explicit fallback to paramdump when available and limited offline editing of existing settings on unsupported builds. This accepts the maintenance cost of an internal interface because paramdump requires a database and source text alone does not capture every build-dependent default; unknown layouts must not be guessed.

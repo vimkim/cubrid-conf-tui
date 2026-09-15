@@ -46,8 +46,8 @@ replaces the target with a synced file in the same directory and syncs the direc
 The next save replaces that backup with the immediately previous file. Observed
 changes to file identity, content, permissions or ancestor identities stop a save.
 These checks detect ordinary conflicts; they do not exclude a concurrent writer
-between the final check and replacement. ACLs and extended attributes are not
-preserved by this initial writer. Failures retain input and report the inspected
+between the final check and replacement. ACLs and extended attributes are copied and verified on both files; an inability
+to preserve them stops replacement. Failures retain input and report the inspected
 file outcome, including durability uncertainty after replacement.
 
 ## Development checks

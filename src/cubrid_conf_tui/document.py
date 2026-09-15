@@ -30,17 +30,20 @@ def editing_target(environment: Mapping[str, str]) -> Path:
         result = subprocess.run(
             [str(executable), "--version"],
             env=dict(environment),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ConfigurationError(
             f"Unusable CUBRID: {executable} --version failed: {error}"
         ) from error
-    if result.returncode:
+    if result.returncode or not re.search(
+        rb"(?m)^CUBRID [0-9]+\.[0-9]+", result.stdout
+    ):
         raise ConfigurationError(
-            f"Unusable CUBRID: {executable} --version exited {result.returncode}."
+            f"Unusable CUBRID: {executable} --version did not return a valid version "
+            f"(exit {result.returncode}). Check installation libraries and environment."
         )
     return Path(
         environment.get("CUBRID_CONF_FILE") or root / "conf/cubrid.conf"
@@ -107,15 +110,23 @@ def inspect_path(path: Path) -> tuple[Revision, tuple[tuple[int, int], ...]]:
     return Revision.from_stat(info), tuple(parents)
 
 
+def file_attributes(path: Path | int) -> dict[str, bytes]:
+    return {name: os.getxattr(path, name) for name in os.listxattr(path)}
+
+
 class ConfigurationDocument:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.requires_reload = False
         self.reload()
 
     def reload(self) -> None:
         self.revision, self.parents = inspect_path(self.path)
         self.original = self.path.read_bytes()
+        self.attributes = file_attributes(self.path)
         self.check_conflict()
+        if b"\r" in self.original.replace(b"\r\n", b""):
+            raise ConfigurationError("Unsupported document: bare carriage return.")
         self.lines = self.original.decode("utf-8").splitlines(keepends=True)
         self.assignments: dict[str, Assignment] = {}
         section = ""
@@ -188,6 +199,7 @@ class ConfigurationDocument:
                 revision == self.revision
                 and parents == self.parents
                 and self.path.read_bytes() == self.original
+                and file_attributes(self.path) == self.attributes
             )
         except (OSError, ConfigurationError) as error:
             raise ConfigurationError(
@@ -197,6 +209,8 @@ class ConfigurationDocument:
             raise ConfigurationError("External-file conflict: reload before saving.")
 
     def save(self, name: str, value: str) -> str:
+        if self.requires_reload:
+            raise ConfigurationError("Please reload before saving again.")
         validate_value(value)
         assignment = self.assignments[name]
         new_line = assignment.prefix + value + assignment.suffix
@@ -239,6 +253,20 @@ class ConfigurationDocument:
                     ):
                         os.fchown(stream.fileno(), self.revision.uid, self.revision.gid)
                     os.fchmod(stream.fileno(), stat.S_IMODE(self.revision.mode))
+                    inherited = file_attributes(stream.fileno())
+                    for attribute in inherited.keys() - self.attributes.keys():
+                        os.removexattr(stream.fileno(), attribute)
+                    for attribute, data in self.attributes.items():
+                        if inherited.get(attribute) != data:
+                            os.setxattr(stream.fileno(), attribute, data)
+                    if file_attributes(
+                        stream.fileno()
+                    ) != self.attributes or stat.S_IMODE(
+                        os.fstat(stream.fileno()).st_mode
+                    ) != stat.S_IMODE(self.revision.mode):
+                        raise OSError(
+                            "Could not preserve file permissions and attributes."
+                        )
                     stream.flush()
                     os.fsync(stream.fileno())
             self.check_conflict()
@@ -278,7 +306,13 @@ class ConfigurationDocument:
                 except OSError:
                     # A cleanup failure must not replace the verified save outcome.
                     pass
-        self.reload()
+        try:
+            self.reload()
+        except (ConfigurationError, OSError, UnicodeError) as error:
+            self.requires_reload = True
+            raise ConfigurationError(
+                f"Saved file; reload failed: {error}. Please reopen the application."
+            ) from error
         return (
             f"Saved file: {name} = {value}. Backup: {backup}. "
             "Activation requirements unavailable."

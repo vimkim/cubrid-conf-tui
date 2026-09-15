@@ -11,7 +11,7 @@ def installation(tmp_path: Path) -> tuple[dict[str, str], Path]:
     root = tmp_path / "cubrid"
     (root / "bin").mkdir(parents=True)
     executable = root / "bin" / "cubrid"
-    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.write_text("#!/bin/sh\nprintf 'CUBRID 11.5.0\\n' >&2\n")
     executable.chmod(0o755)
     (root / "conf").mkdir()
     target = root / "conf" / "cubrid.conf"
@@ -124,6 +124,7 @@ async def test_rejects_setting_injection_and_retains_input(installation, value):
         b"[common]\nx=1\n[common]\ny=2\n",
         b"[common]\nx=one\\\ny=2\n",
         b"[common]\nbroken\n",
+        b"[common]\nx=1\ry=2\n",
         b"[common]\nx=one\x00two\n",
         b"[common]\nx=" + b"a" * 510 + b"\n",
     ],
@@ -186,7 +187,8 @@ async def test_observed_external_conflict_retains_text(installation, change):
 
 
 @pytest.mark.parametrize(
-    "problem", ["missing", "empty", "directory", "executable", "broken"]
+    "problem",
+    ["missing", "empty", "directory", "executable", "broken", "silent_failure"],
 )
 async def test_unusable_installation_never_uses_path_or_writes(
     installation, tmp_path, problem
@@ -210,7 +212,8 @@ async def test_unusable_installation_never_uses_path_or_writes(
     elif problem == "executable":
         (Path(env["CUBRID"]) / "bin/cubrid").chmod(0o644)
     else:
-        (Path(env["CUBRID"]) / "bin/cubrid").write_text("#!/bin/sh\nexit 1\n")
+        code = 0 if problem == "silent_failure" else 1
+        (Path(env["CUBRID"]) / "bin/cubrid").write_text(f"#!/bin/sh\nexit {code}\n")
     app = ConfigurationApp(environment=env)
     async with app.run_test() as pilot:
         assert "CUBRID" in str(app.query_one("#status", Static).content)
@@ -330,3 +333,92 @@ async def test_repeated_save_backs_up_immediately_previous_file(installation):
         await pilot.press("enter")
         assert target.with_name(target.name + ".bak").read_bytes() == previous
         assert b"max_clients = 300" in target.read_bytes()
+
+
+async def test_save_preserves_extended_file_attributes(installation):
+    import os
+
+    env, target = installation
+    os.setxattr(target, "user.ticket01", b"preserve me")
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        await pilot.press("enter")
+        assert os.getxattr(target, "user.ticket01") == b"preserve me"
+        backup = target.with_name(target.name + ".bak")
+        assert os.getxattr(backup, "user.ticket01") == b"preserve me"
+
+
+async def test_save_preserves_named_user_acl_and_removes_inherited_acl(installation):
+    import os
+    import struct
+
+    env, target = installation
+    acl = struct.pack("<I", 2) + b"".join(
+        struct.pack("<HHI", tag, permissions, user)
+        for tag, permissions, user in [
+            (1, 6, 0xFFFFFFFF),
+            (2, 4, 65534),
+            (4, 4, 0xFFFFFFFF),
+            (16, 4, 0xFFFFFFFF),
+            (32, 0, 0xFFFFFFFF),
+        ]
+    )
+    os.setxattr(target, "system.posix_acl_access", acl)
+    # Distinct inherited permissions must not leak into replacement/backup.
+    inherited = acl.replace(
+        struct.pack("<HHI", 2, 4, 65534), struct.pack("<HHI", 2, 4, 65533)
+    )
+    os.setxattr(target.parent, "system.posix_acl_default", inherited)
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        await pilot.press("enter")
+        assert "Saved file" in str(app.query_one("#status", Static).content)
+        assert os.getxattr(target, "system.posix_acl_access") == acl
+        backup = target.with_name(target.name + ".bak")
+        assert os.getxattr(backup, "system.posix_acl_access") == acl
+
+
+async def test_post_commit_reload_error_reports_saved_file(installation, monkeypatch):
+    import os
+
+    env, target = installation
+    app = ConfigurationApp(environment=env)
+    real_replace = os.replace
+    real_read = Path.read_bytes
+    committed = False
+    reads_after_commit = 0
+
+    def replace(source, destination):
+        nonlocal committed
+        real_replace(source, destination)
+        if Path(destination) == target:
+            committed = True
+
+    def read(path):
+        nonlocal reads_after_commit
+        if path == target and committed:
+            reads_after_commit += 1
+            if reads_after_commit == 2:
+                raise PermissionError("injected post-commit reload failure")
+        return real_read(path)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "replace", replace)
+            patch.setattr(Path, "read_bytes", read)
+            await pilot.press("enter")
+        assert "Saved file; reload failed" in str(
+            app.screen.query_one("#save-status", Static).content
+        )
+        assert app.screen.query_one(Input).value == "200"
+        assert b"max_clients = 200" in target.read_bytes()
+        await pilot.press("enter")
+        assert "reload before saving" in str(
+            app.screen.query_one("#save-status", Static).content
+        )

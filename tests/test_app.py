@@ -118,10 +118,6 @@ async def test_rejects_setting_injection_and_retains_input(installation, value):
 @pytest.mark.parametrize(
     "document",
     [
-        b"[common]\nx=1\nx=2\n",
-        b"[common]\nx=1\nX=2\n",
-        b"[Common]\nx=1\n",
-        b"[common]\nx=1\n[common]\ny=2\n",
         b"[common]\nx=one\\\ny=2\n",
         b"[common]\nbroken\n",
         b"[common]\nx=1\ry=2\n",
@@ -438,3 +434,334 @@ async def test_save_preserves_special_permission_bits(installation):
         assert stat.S_IMODE(target.stat().st_mode) == 0o4640
         backup = target.with_name(target.name + ".bak")
         assert stat.S_IMODE(backup.stat().st_mode) == 0o4640
+
+
+async def test_remove_override_preserves_comments_scope_and_filtered_list(installation):
+    env, target = installation
+    original = target.read_bytes()
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("m", "x", "c", "enter", "ctrl+r")
+        assert target.read_bytes() == (
+            b"# retained\r\n[common]\r\n    # clients\r\n"
+            b"enable_feature=no\r\n[@demodb]\r\nmax_clients=5\r\n"
+        )
+        assert target.with_name(target.name + ".bak").read_bytes() == original
+        assert target.stat().st_mode & 0o777 == 0o640
+        assert app.query_one("#search", Input).value == "mxc"
+        assert app.query_one(OptionList).option_count == 0
+        assert app.query_one(OptionList).highlighted is None
+        message = str(app.query_one("#status", Static).content)
+        assert "Removed override" in message
+        assert "inheritance" in message
+
+
+async def test_case_variants_and_repeated_common_sections_use_last_assignment(
+    installation,
+):
+    env, target = installation
+    original = (
+        b"[ Common ]\r\nMax_Clients=10 # first\r\nmax_clients=20\r\n"
+        b"[@Demo]\r\nMAX_CLIENTS=2\r\n[@demo]\r\nmax_clients=3\r\n"
+        b"[COMMON]\r\n  MAX_CLIENTS = 30 ; last\r\nother=\r\n"
+    )
+    target.write_bytes(original)
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("m", "x", "c")
+        assert app.query_one(OptionList).option_count == 1
+        assert "MAX_CLIENTS = 30" in str(
+            app.query_one(OptionList).get_option_at_index(0).prompt
+        )
+        await pilot.press("enter")
+        assert app.screen.query_one(Input).value == "30"
+        app.screen.query_one(Input).value = "40"
+        await pilot.press("enter")
+        edited = original.replace(b"MAX_CLIENTS = 30", b"MAX_CLIENTS = 40")
+        assert target.read_bytes() == edited
+        assert target.with_name(target.name + ".bak").read_bytes() == original
+        await pilot.press("enter", "ctrl+r")
+        assert target.read_bytes() == (
+            b"[ Common ]\r\n # first\r\n"
+            b"[@Demo]\r\nMAX_CLIENTS=2\r\n[@demo]\r\nmax_clients=3\r\n"
+            b"[COMMON]\r\n  # ; last\r\nother=\r\n"
+        )
+        assert target.with_name(target.name + ".bak").read_bytes() == edited
+        assert app.query_one("#search", Input).value == "mxc"
+        assert app.query_one(OptionList).option_count == 0
+
+
+@pytest.mark.parametrize(
+    ("original", "edited", "removed"),
+    [
+        (b"[common]\nx=", b"[common]\nx=0", b"[common]\n"),
+        (b"[common]\nx=1", b"[common]\nx=0", b"[common]\n"),
+        (b'[common]\nx="" # keep', b"[common]\nx=0 # keep", b"[common]\n # keep"),
+        (b"[common]\nx=1 ; keep", b"[common]\nx=0 ; keep", b"[common]\n# ; keep"),
+        (b"[common]\nx=1\ny=", b"[common]\nx=0\ny=", b"[common]\ny="),
+    ],
+)
+async def test_edit_and_remove_preserve_empty_values_and_final_line(
+    installation, original, edited, removed
+):
+    env, target = installation
+    target.write_bytes(original)
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("x", "enter")
+        app.screen.query_one(Input).value = "0"
+        await pilot.press("enter")
+        assert target.read_bytes() == edited
+        await pilot.press("enter", "ctrl+r")
+        assert target.read_bytes() == removed
+        assert target.with_name(target.name + ".bak").read_bytes() == edited
+    reopened = ConfigurationApp(environment=env)
+    async with reopened.run_test():
+        assert str(reopened.query_one("#status", Static).content) == ""
+        assert reopened.query_one(OptionList).option_count == (
+            1 if b"y=" in removed else 0
+        )
+
+
+async def test_remove_last_visible_row_selects_remaining_filtered_row(installation):
+    env, target = installation
+    target.write_bytes(b"[common]\nx_first=1\nother=0\nx_last=2\n")
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("x", "tab", "down", "enter", "ctrl+r")
+        assert app.query_one("#search", Input).value == "x"
+        options = app.query_one(OptionList)
+        assert options.option_count == 1
+        assert options.highlighted == 0
+        assert options.get_option_at_index(0).id == "x_first"
+        assert target.read_bytes() == b"[common]\nx_first=1\nother=0\n"
+
+
+@pytest.mark.parametrize("action", ["enter", "ctrl+r"])
+@pytest.mark.parametrize(
+    "redirection", ["parent_symlink", "parent_replacement", "content"]
+)
+async def test_remove_and_edit_block_external_changes(
+    installation, action, redirection
+):
+    env, target = installation
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        if redirection == "content":
+            target.write_bytes(b"[common]\nmax_clients=300\n")
+        else:
+            parent = target.parent
+            moved = parent.with_name("moved")
+            parent.rename(moved)
+            if redirection == "parent_symlink":
+                parent.symlink_to(moved, target_is_directory=True)
+            else:
+                parent.mkdir()
+                target.write_bytes(b"[common]\nmax_clients=400\n")
+        observed = target.read_bytes()
+        await pilot.press(action)
+        assert app.screen.query_one(Input).value == "200"
+        message = str(app.screen.query_one("#save-status", Static).content)
+        assert "conflict" in message and "reload" in message
+        assert target.read_bytes() == observed
+        assert not target.with_name(target.name + ".bak").exists()
+
+
+@pytest.mark.parametrize("action", ["enter", "ctrl+r"])
+async def test_redirect_after_replacement_reports_conflict(
+    installation, monkeypatch, action
+):
+    import os
+
+    env, target = installation
+    original = target.read_bytes()
+    app = ConfigurationApp(environment=env)
+    real_replace = os.replace
+    redirected = target.with_suffix(".redirected")
+
+    def replace(source, destination):
+        real_replace(source, destination)
+        if Path(destination) == target:
+            target.rename(redirected)
+            target.symlink_to(redirected)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "replace", replace)
+            await pilot.press(action)
+        message = str(app.screen.query_one("#save-status", Static).content)
+        assert "Saved file" not in message
+        assert "redirected" in message and "reload" in message.lower()
+        assert app.screen.query_one(Input).value == "200"
+        assert target.is_symlink()
+        assert target.with_name(target.name + ".bak").read_bytes() == original
+
+
+@pytest.mark.parametrize("action", ["enter", "ctrl+r"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "stage_backup",
+        "stage_new",
+        "backup_replace",
+        "backup_sync",
+        "target_replace",
+        "target_replace_then_error",
+        "target_sync",
+        "inspection",
+        "external_after_replace",
+    ],
+)
+async def test_interrupted_saves_preserve_recovery_and_report_actual_files(
+    installation, monkeypatch, action, failure
+):
+    import os
+    import stat
+
+    env, target = installation
+    original = target.read_bytes()
+    backup = target.with_name(target.name + ".bak")
+    previous_backup = b"previous recovery copy\n"
+    backup.write_bytes(previous_backup)
+    expected = (
+        original.replace(b"max_clients = 100", b"max_clients = 200")
+        if action == "enter"
+        else b"# retained\r\n[common]\r\n    # clients\r\nenable_feature=no\r\n"
+        b"[@demodb]\r\nmax_clients=5\r\n"
+    )
+    app = ConfigurationApp(environment=env)
+    real_sync, real_replace, real_read = os.fsync, os.replace, Path.read_bytes
+    staged = 0
+    committed = False
+
+    def sync(fd):
+        nonlocal staged
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            staged += 1
+            if (staged == 1 and failure == "stage_backup") or (
+                staged == 2 and failure == "stage_new"
+            ):
+                raise OSError("injected staging interruption")
+        elif (not committed and failure == "backup_sync") or (
+            committed and failure == "target_sync"
+        ):
+            raise OSError("injected directory interruption")
+        return real_sync(fd)
+
+    def replace(source, destination):
+        nonlocal committed
+        if (Path(destination) == backup and failure == "backup_replace") or (
+            Path(destination) == target and failure == "target_replace"
+        ):
+            raise OSError("injected replacement interruption")
+        real_replace(source, destination)
+        if Path(destination) == target:
+            committed = True
+            if failure == "target_replace_then_error":
+                raise OSError("injected error after successful rename")
+            if failure == "external_after_replace":
+                target.write_bytes(b"[common]\nmax_clients=999\n")
+
+    def read(path):
+        if path == target and committed and failure == "inspection":
+            raise PermissionError("injected inspection failure")
+        return real_read(path)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "fsync", sync)
+            patch.setattr(os, "replace", replace)
+            patch.setattr(Path, "read_bytes", read)
+            await pilot.press(action)
+        assert app.screen.query_one(Input).value == "200"
+        message = str(app.screen.query_one("#save-status", Static).content)
+        assert "Saved file" not in message and "Removed override" not in message
+        if failure == "external_after_replace":
+            assert target.read_bytes() == b"[common]\nmax_clients=999\n"
+            assert "changed" in message and "reload" in message.lower()
+        elif committed:
+            assert target.read_bytes() == expected
+            assert (
+                "outcome unknown" if failure == "inspection" else "New file is present"
+            ) in message
+            assert "reload" in message.lower()
+        else:
+            assert target.read_bytes() == original
+            assert "Original file verified unchanged" in message
+        assert backup.read_bytes() == (
+            previous_backup
+            if failure in {"stage_backup", "stage_new", "backup_replace"}
+            else original
+        )
+        assert not list(target.parent.glob(".cubrid.conf.*"))
+        if committed:
+            await pilot.press(action)
+            assert "reload before saving" in str(
+                app.screen.query_one("#save-status", Static).content
+            )
+
+
+@pytest.mark.parametrize("action", ["enter", "ctrl+r"])
+@pytest.mark.parametrize("point", ["before_target", "after_target"])
+def test_process_interruption_leaves_intact_target_and_recovery(
+    installation, action, point
+):
+    import subprocess
+    import sys
+
+    env, target = installation
+    original = target.read_bytes()
+    # Terminate the actual app process at a filesystem boundary. This bypasses
+    # finally blocks, unlike a caught OSError, and never touches an active config.
+    script = """
+import asyncio
+import os
+import sys
+from pathlib import Path
+from textual.widgets import Input
+from cubrid_conf_tui.app import ConfigurationApp
+
+root, selected, action, point = sys.argv[1:]
+target = Path(selected)
+real_replace = os.replace
+
+def replace(source, destination):
+    if Path(destination) == target and point == "before_target":
+        os._exit(91)
+    real_replace(source, destination)
+    if Path(destination) == target and point == "after_target":
+        os._exit(91)
+
+async def run():
+    app = ConfigurationApp(environment={"CUBRID": root})
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        os.replace = replace
+        await pilot.press(action)
+
+asyncio.run(run())
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, env["CUBRID"], str(target), action, point],
+        capture_output=True,
+        timeout=15,
+    )
+    assert result.returncode == 91, result.stderr.decode()
+    expected_new = (
+        original.replace(b"max_clients = 100", b"max_clients = 200")
+        if action == "enter"
+        else b"# retained\r\n[common]\r\n    # clients\r\nenable_feature=no\r\n"
+        b"[@demodb]\r\nmax_clients=5\r\n"
+    )
+    assert target.read_bytes() == (
+        original if point == "before_target" else expected_new
+    )
+    assert target.with_name(target.name + ".bak").read_bytes() == original
+    assert target.stat().st_mode & 0o777 == 0o640

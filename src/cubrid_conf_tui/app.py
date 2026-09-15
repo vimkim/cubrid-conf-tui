@@ -34,7 +34,10 @@ class ValueInput(Input):
 
 
 class ValueEditor(ModalScreen[str | None]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+r", "remove_override", "Remove override"),
+    ]
 
     def __init__(self, document: ConfigurationDocument, assignment: Assignment) -> None:
         super().__init__()
@@ -52,7 +55,11 @@ class ValueEditor(ModalScreen[str | None]):
             markup=False,
         )
         yield ValueInput(self.assignment.value, id="value")
-        yield Static("Enter saves • Esc cancels", id="save-status", markup=False)
+        yield Static(
+            "Enter saves • Ctrl+R removes override • Esc cancels",
+            id="save-status",
+            markup=False,
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -71,6 +78,14 @@ class ValueEditor(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_remove_override(self) -> None:
+        try:
+            message = self.document.remove_override(self.assignment.name)
+        except (ConfigurationError, OSError, UnicodeError) as error:
+            self.query_one("#save-status", Static).update(str(error))
+        else:
+            self.dismiss(message)
 
 
 class ConfigurationApp(App[None]):
@@ -133,7 +148,7 @@ class ConfigurationApp(App[None]):
                     options.add_option(
                         Option(
                             Text(f"{assignment.name} = {assignment.value}"),
-                            id=assignment.name,
+                            id=assignment.name.lower(),
                         )
                     )
             options.highlighted = 0 if options.option_count else None
@@ -155,6 +170,10 @@ class ConfigurationApp(App[None]):
             options = self.query_one(OptionList)
             selection = options.highlighted
             self.refresh_settings()
-            options.highlighted = selection
+            options.highlighted = (
+                min(selection or 0, options.option_count - 1)
+                if options.option_count
+                else None
+            )
             self.query_one("#status", Static).update(message)
         self.query_one("#search", Input).focus()

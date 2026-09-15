@@ -129,9 +129,8 @@ class ConfigurationDocument:
             raise ConfigurationError("Unsupported document: bare carriage return.")
         self.lines = self.original.decode("utf-8").splitlines(keepends=True)
         self.assignments: dict[str, Assignment] = {}
+        self.common_assignments: list[Assignment] = []
         section = ""
-        sections: set[str] = set()
-        keys: set[tuple[str, str]] = set()
         for index, line in enumerate(self.lines):
             body = line.removesuffix("\n").removesuffix("\r")
             if (
@@ -145,26 +144,25 @@ class ConfigurationDocument:
             if not stripped or stripped.startswith("#"):
                 continue
             if stripped.startswith("["):
-                match = re.fullmatch(r"\[([@%]?[A-Za-z0-9_.-]+)\]", stripped)
+                match = re.fullmatch(
+                    r"\[[ \t]*([@%]?[ \t]*[A-Za-z0-9_.-]+)[ \t]*\]", stripped
+                )
                 if not match:
                     self.unsupported(index, "section syntax")
                 assert match is not None
-                section = match[1]
-                if section in sections or (
-                    not section.startswith("@") and section != section.lower()
-                ):
-                    self.unsupported(index, "duplicate or case-variant section")
-                sections.add(section)
+                section = match[1].strip()
+                if section.startswith(("@", "%")):
+                    section = section[0] + section[1:].lstrip()
+                if not section.startswith("@"):
+                    section = section.lower()
                 continue
-            match = re.fullmatch(r"([ \t]*([a-z][a-z0-9_]*)[ \t]*=[ \t]*)(.*)", body)
+            match = re.fullmatch(
+                r"([ \t]*([A-Za-z][A-Za-z0-9_]*)[ \t]*=[ \t]*)(.*)", body
+            )
             if not match or not section:
-                self.unsupported(index, "assignment syntax or case variant")
+                self.unsupported(index, "assignment syntax")
             assert match is not None
             prefix, name, tail = match.groups()
-            identity = (section, name)
-            if identity in keys:
-                self.unsupported(index, "duplicate assignment")
-            keys.add(identity)
             # Quoted values may contain comment characters. Keep their raw spelling.
             if tail.startswith(('"', "'")):
                 end = tail.find(tail[0], 1)
@@ -180,13 +178,15 @@ class ConfigurationDocument:
                 value = tail[:end].rstrip(" \t")
                 suffix = tail[len(value) :]
             if section == "common":
-                self.assignments[name] = Assignment(
+                assignment = Assignment(
                     name,
                     value,
                     index,
                     prefix,
                     suffix + line[len(body) :],
                 )
+                self.assignments[name.lower()] = assignment
+                self.common_assignments.append(assignment)
 
     @staticmethod
     def unsupported(index: int, reason: str) -> None:
@@ -212,7 +212,7 @@ class ConfigurationDocument:
         if self.requires_reload:
             raise ConfigurationError("Please reload before saving again.")
         validate_value(value)
-        assignment = self.assignments[name]
+        assignment = self.assignments[name.lower()]
         new_line = assignment.prefix + value + assignment.suffix
         if len(new_line.encode("utf-8")) > 510:
             raise ConfigurationError(
@@ -232,8 +232,34 @@ class ConfigurationDocument:
         updated_lines = self.lines.copy()
         updated_lines[assignment.line] = new_line
         updated = "".join(updated_lines).encode("utf-8")
+        return self.write(updated, f"Saved file: {name} = {value}.")
+
+    def remove_override(self, name: str) -> str:
+        updated_lines = self.lines.copy()
+        for assignment in self.common_assignments:
+            if assignment.name.lower() != name.lower():
+                continue
+            suffix = assignment.suffix
+            if suffix.lstrip().startswith(("#", ";")):
+                indent = assignment.prefix[
+                    : len(assignment.prefix) - len(assignment.prefix.lstrip())
+                ]
+                # CUBRID accepts # as a whole-line comment, but not a bare semicolon.
+                marker = "#" if suffix.lstrip().startswith(";") else ""
+                updated_lines[assignment.line] = indent + marker + suffix
+            else:
+                updated_lines[assignment.line] = ""
+        return self.write(
+            "".join(updated_lines).encode("utf-8"),
+            f"Removed override: {name}; inheritance restored in the file.",
+        )
+
+    def write(self, updated: bytes, message: str) -> str:
+        if self.requires_reload:
+            raise ConfigurationError("Please reload before saving again.")
         backup = self.path.with_name(self.path.name + ".bak")
         temporary_paths: list[Path] = []
+        staged_revision: Revision | None = None
         replacement_attempted = False
         try:
             self.check_conflict()
@@ -269,6 +295,7 @@ class ConfigurationDocument:
                             "Could not preserve file permissions and attributes."
                         )
                     os.fsync(stream.fileno())
+                    staged_revision = Revision.from_stat(os.fstat(stream.fileno()))
             self.check_conflict()
             os.replace(temporary_paths[0], backup)
             directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -280,14 +307,30 @@ class ConfigurationDocument:
                 os.fsync(directory)
             finally:
                 os.close(directory)
+            assert staged_revision is not None
+            self.check_replacement(staged_revision)
             if self.path.read_bytes() != updated:
                 raise ConfigurationError(
                     "Target changed after replacement; reload before saving."
                 )
-        except OSError as error:
+        except (OSError, ConfigurationError) as error:
+            if replacement_attempted:
+                self.requires_reload = True
             try:
+                revision, parents = inspect_path(self.path)
+                original_identity = (
+                    revision == self.revision and parents == self.parents
+                )
+                if not original_identity:
+                    if replacement_attempted:
+                        assert staged_revision is not None
+                        self.check_replacement(staged_revision)
+                    else:
+                        raise ConfigurationError(
+                            "Target changed or redirected; reload."
+                        )
                 observed = self.path.read_bytes()
-                if replacement_attempted and observed == updated:
+                if not original_identity and observed == updated:
                     outcome = (
                         "New file is present; "
                         "durability could not be confirmed. Reload."
@@ -296,6 +339,8 @@ class ConfigurationDocument:
                     outcome = "Original file verified unchanged."
                 else:
                     outcome = "Target changed; reload before saving."
+            except ConfigurationError:
+                outcome = "Target changed or redirected; reload before saving."
             except OSError:
                 outcome = "Save outcome unknown: target cannot be inspected. Reload."
             raise ConfigurationError(f"{outcome} {error}") from error
@@ -313,7 +358,29 @@ class ConfigurationDocument:
             raise ConfigurationError(
                 f"Saved file; reload failed: {error}. Please reopen the application."
             ) from error
-        return (
-            f"Saved file: {name} = {value}. Backup: {backup}. "
-            "Activation requirements unavailable."
-        )
+        return f"{message} Backup: {backup}. Activation requirements unavailable."
+
+    def check_replacement(self, expected: Revision) -> None:
+        revision, parents = inspect_path(self.path)
+        # rename can change ctime; compare the staged identity and preserved metadata.
+        if (
+            parents != self.parents
+            or (
+                revision.device,
+                revision.inode,
+                revision.mode,
+                revision.uid,
+                revision.gid,
+            )
+            != (
+                expected.device,
+                expected.inode,
+                expected.mode,
+                expected.uid,
+                expected.gid,
+            )
+            or file_attributes(self.path) != self.attributes
+        ):
+            raise ConfigurationError(
+                "Target changed or redirected; reload before saving."
+            )

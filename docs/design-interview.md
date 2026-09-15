@@ -51,8 +51,8 @@ Status: interviewing; implementation has not started.
 
 ### Next decision frontier
 
-- Resolve installed-only first-run offline catalog feasibility through a bounded prototype, or explicitly accept incomplete catalog availability in that situation?
-- Implementation stack and detailed compatibility strategy depend on that finding.
+- Choose a compatibility policy for installed-library metadata extraction and unsupported layouts, informed by the successful prototype.
+- Implementation stack and detailed compatibility strategy depend on that choice.
 
 Recommendations on these questions are not yet accepted.
 
@@ -62,7 +62,7 @@ Recommendations on these questions are not yet accepted.
 - Actual stopped-server failures and standalone database-opening effects.
 - Authoritative activation rules and validation metadata beyond paramdump.
 - Handling stripped/separate debug information and source/binary mismatch.
-- A complete catalog when no database can provide a live dump and source is absent.
+- Generalizing the successful installed-only catalog probe beyond its tested internal layout, and converting raw metadata to configuration semantics.
 
 ## Verified source findings
 
@@ -117,9 +117,13 @@ Individual `CUBRID_<UPPERCASE_PARAMETER_NAME>` environment variables can overrid
 
 Exact duplicate `section:key` entries are last-value-wins in the parser (`src/base/ini_parser.c:298–309,655–657`). Removing only the last occurrence can reveal an earlier assignment. Case-variant behavior still requires checking before implementing the writer.
 
+### Accepted prototype detour and outcome
+
+Q16 accepted a bounded executable prototype of installed-library metadata extraction without database startup/opening. The probe succeeded for three debug libraries and an older release server library. See [offline-catalog-findings.md](offline-catalog-findings.md) for results, limitations, and the preserved prototype branch/commit. Installed-only feasibility is established for these artifacts; general layout compatibility and complete editable schema interpretation are not established.
+
 ## Interview checkpoint
 
-Rounds one through four answered. Installed-only first-run offline catalog completeness is the remaining central feasibility gap. Next: decide whether to investigate a compiled-metadata helper through a bounded prototype. No production implementation has started.
+Rounds one through four answered, Q16 prototype completed. Next: decide compatibility/fallback policy for the metadata extractor, then settle implementation choices and confirm the complete design. No production implementation has started.
 
 ## References supplied by the user
 

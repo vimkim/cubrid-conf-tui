@@ -50,6 +50,7 @@ def test_uv_terminal_launch_and_clean_exit(tmp_path):
     before = termios.tcgetattr(slave)
     environment = dict(os.environ, CUBRID=str(root), TERM="xterm-256color")
     environment.pop("CUBRID_CONF_FILE", None)
+    environment["CUBRID_DATABASES"] = str(tmp_path / "empty-registry")
     process = subprocess.Popen(
         ["uv", "run", "--frozen", "cubrid-conf-tui"],
         env=environment,

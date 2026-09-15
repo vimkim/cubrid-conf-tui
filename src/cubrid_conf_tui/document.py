@@ -130,6 +130,8 @@ class ConfigurationDocument:
         self.lines = self.original.decode("utf-8").splitlines(keepends=True)
         self.assignments: dict[str, Assignment] = {}
         self.common_assignments: list[Assignment] = []
+        self.database_assignments: dict[str, dict[str, str]] = {}
+        self.common_insert_at: int | None = None
         section = ""
         for index, line in enumerate(self.lines):
             body = line.removesuffix("\n").removesuffix("\r")
@@ -140,6 +142,8 @@ class ConfigurationDocument:
                 or body.rstrip().endswith("\\")
             ):
                 self.unsupported(index, "controls, long lines or continuation")
+            if section == "common":
+                self.common_insert_at = index
             stripped = body.strip()
             if not stripped or stripped.startswith("#"):
                 continue
@@ -155,6 +159,8 @@ class ConfigurationDocument:
                     section = section[0] + section[1:].lstrip()
                 if not section.startswith("@"):
                     section = section.lower()
+                if section == "common":
+                    self.common_insert_at = index + 1
                 continue
             match = re.fullmatch(
                 r"([ \t]*([A-Za-z][A-Za-z0-9_]*)[ \t]*=[ \t]*)(.*)", body
@@ -177,6 +183,10 @@ class ConfigurationDocument:
                 end = comment.start() if comment else len(tail)
                 value = tail[:end].rstrip(" \t")
                 suffix = tail[len(value) :]
+            if section.startswith("@"):
+                self.database_assignments.setdefault(section[1:], {})[name.lower()] = (
+                    value
+                )
             if section == "common":
                 assignment = Assignment(
                     name,
@@ -187,6 +197,9 @@ class ConfigurationDocument:
                 )
                 self.assignments[name.lower()] = assignment
                 self.common_assignments.append(assignment)
+
+        if section == "common":
+            self.common_insert_at = len(self.lines)
 
     @staticmethod
     def unsupported(index: int, reason: str) -> None:
@@ -208,12 +221,21 @@ class ConfigurationDocument:
         if not same:
             raise ConfigurationError("External-file conflict: reload before saving.")
 
-    def save(self, name: str, value: str) -> str:
+    def save(self, name: str, value: str, *, allow_insert: bool = False) -> str:
         if self.requires_reload:
             raise ConfigurationError("Please reload before saving again.")
         validate_value(value)
-        assignment = self.assignments[name.lower()]
-        new_line = assignment.prefix + value + assignment.suffix
+        assignment = self.assignments.get(name.lower())
+        if assignment is None and (
+            not allow_insert or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+        ):
+            raise ConfigurationError("Parameter is not a supported new common setting.")
+        newline = "\r\n" if b"\r\n" in self.original else "\n"
+        new_line = (
+            assignment.prefix + value + assignment.suffix
+            if assignment
+            else name + "=" + value + newline
+        )
         if len(new_line.encode("utf-8")) > 510:
             raise ConfigurationError(
                 "Unsupported value: resulting line exceeds 510 bytes."
@@ -230,7 +252,18 @@ class ConfigurationDocument:
                 "comment or quote characters."
             )
         updated_lines = self.lines.copy()
-        updated_lines[assignment.line] = new_line
+        if assignment:
+            updated_lines[assignment.line] = new_line
+        else:
+            index = self.common_insert_at
+            if index is None:
+                index = len(updated_lines)
+            if index and not updated_lines[index - 1].endswith("\n"):
+                updated_lines[index - 1] += newline
+            if self.common_insert_at is None:
+                updated_lines.insert(index, "[common]" + newline)
+                index += 1
+            updated_lines.insert(index, new_line)
         updated = "".join(updated_lines).encode("utf-8")
         return self.write(updated, f"Saved file: {name} = {value}.")
 

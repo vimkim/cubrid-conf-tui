@@ -1,8 +1,9 @@
 # cubrid-conf-tui
 
-A Linux terminal editor for existing CUBRID `[common]` assignments.
-The application currently runs in **limited offline editing** mode. Defaults, types,
-constraints, activation requirements, and runtime observations are unavailable.
+A Linux terminal editor for CUBRID `[common]` settings. Select a database for
+ordinary and hidden live parameter discovery, or use **limited offline editing**
+of existing assignments. Live dumps show role-specific current/default values;
+types, constraints and activation requirements remain unavailable.
 A successful save changes the file only; it does not start a database or apply live values.
 
 ## Run
@@ -10,6 +11,8 @@ A successful save changes the file only; it does not start a database or apply l
 ```sh
 export CUBRID=/absolute/path/to/cubrid
 uv run cubrid-conf-tui
+# Or select a database explicitly:
+uv run cubrid-conf-tui demodb
 
 # Install the CLI into an isolated tool environment
 uv tool install .
@@ -29,6 +32,29 @@ and selection. Removal retains the query and selects the next remaining row (or
 the previous row when removing the last result). After a conflict, exit and reopen to
 reload the file; copy any entered text you want to keep first.
 
+## Database discovery
+
+An explicit database name selects the observation target. When omitted, registry
+candidates are offered from `$CUBRID_DATABASES/databases.txt`, or `./databases.txt`
+when that variable is absent/empty. Candidates do not imply a running server.
+Esc leaves the picker offline; an unavailable/empty registry leaves editing open.
+Ctrl+D reopens the picker. Ctrl+F refreshes observations; Esc during discovery
+cancels utility work. Ctrl+Q exits and cleans up outstanding discovery processes.
+
+The selected installation runs `paramdump --CS-mode` twice, ordinary and
+`--dump-flag=0x8` hidden. Each invocation has a 15-second timeout. The supported
+format is the modern `[C*] name=current (default)` / `[S ]` output; other formats
+produce explicit incomplete discovery. Valid records survive partial failures;
+missing roles remain unavailable. Supported compatibility and reproducible
+isolated-database checks are recorded in [ticket 03](docs/implementation/ticket-03.md).
+
+One row combines client and server observations. The editor distinguishes an
+absent common assignment, explicit configured text, role defaults and `*` default
+differences. Database overrides are read-only; displayed `CUBRID_<PARAMETER>` values
+come from the TUI environment, not an observed server environment. Saving updates
+configured state only. Observations change on refresh, never as a side effect of
+saving. No native library is loaded, server started, or standalone fallback used.
+
 ## Supported documents and save behavior
 
 The writer accepts UTF-8 files with LF or CRLF lines and ordinary unambiguous
@@ -44,7 +70,9 @@ Quoted values retain their quote spelling. Enter quoted text for values containi
 Continuation lines, malformed syntax,
 control characters and lines longer than 510 bytes are rejected. Symlinks anywhere
 in the editing path, hardlinks, and nonregular targets or backup files are rejected.
-The file must already exist; adding parameters is not yet supported. Removal keeps
+The file must already exist. Discovered common settings can be inserted; known
+section-qualified settings and `stored_procedure_port` are read-only (existing
+common assignments can still be removed). Removal keeps
 inline comments as standalone comments. A semicolon comment receives a leading
 `#` because CUBRID rejects standalone semicolon comments. Empty assignments are
 explicit overrides and can be removed. A missing final newline is preserved on
@@ -81,6 +109,5 @@ processes. Tests never edit an active developer configuration or start a databas
 
 The [design](docs/design.md), [glossary](CONTEXT.md), and
 [metadata ADR](docs/adr/0001-installed-library-metadata.md) describe subsequent slices.
-Database selection, live discovery, metadata extraction and typed validation are
-not implemented in this ticket. The pyelftools dependency reserves the accepted
+Metadata extraction and typed validation remain future work. The pyelftools dependency reserves the accepted
 stack; no native libraries are loaded by the application.

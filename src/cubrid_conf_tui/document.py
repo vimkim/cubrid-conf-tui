@@ -246,6 +246,7 @@ class ConfigurationDocument:
                 temporary_paths.append(Path(temporary))
                 with os.fdopen(fd, "wb") as stream:
                     stream.write(content)
+                    stream.flush()
                     info = os.fstat(stream.fileno())
                     if (info.st_uid, info.st_gid) != (
                         self.revision.uid,
@@ -267,7 +268,6 @@ class ConfigurationDocument:
                         raise OSError(
                             "Could not preserve file permissions and attributes."
                         )
-                    stream.flush()
                     os.fsync(stream.fileno())
             self.check_conflict()
             os.replace(temporary_paths[0], backup)

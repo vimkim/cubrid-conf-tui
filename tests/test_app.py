@@ -422,3 +422,19 @@ async def test_post_commit_reload_error_reports_saved_file(installation, monkeyp
         assert "reload before saving" in str(
             app.screen.query_one("#save-status", Static).content
         )
+
+
+async def test_save_preserves_special_permission_bits(installation):
+    import stat
+
+    env, target = installation
+    target.chmod(0o4640)
+    app = ConfigurationApp(environment=env)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        app.screen.query_one(Input).value = "200"
+        await pilot.press("enter")
+        assert "Saved file" in str(app.query_one("#status", Static).content)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o4640
+        backup = target.with_name(target.name + ".bak")
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o4640

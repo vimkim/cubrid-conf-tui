@@ -1,6 +1,6 @@
 # CUBRID configuration TUI design
 
-Status: product decisions accepted through Q17; Python with uv selected by the user. Consolidated review pending. Production implementation has not started.
+Status: accepted by the user on 2026-09-15 after consolidated review, including Python with uv, Textual, and pyelftools. The design interview is complete. Production implementation has not started.
 
 ## Purpose and scope
 

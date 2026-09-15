@@ -1,6 +1,6 @@
 # Configuration TUI design interview
 
-Status: interviewing; implementation has not started.
+Status: interview complete; the user confirmed the consolidated design on 2026-09-15. Implementation has not started.
 
 ## Requested behavior
 
@@ -54,15 +54,15 @@ Status: interviewing; implementation has not started.
 - Use installed-library metadata for validated layouts. Fall back to paramdump where available; otherwise offer clearly limited offline editing of existing settings. Never guess an unknown library layout.
 - See [ADR 0001](adr/0001-installed-library-metadata.md) for the trade-off.
 
-### Next decision frontier
+### Final review
 
-- Review the [consolidated design](design.md) and confirm shared understanding. The user selected Python with uv; Textual and pyelftools are the corresponding implementation proposal.
+- The user confirmed the [consolidated design](design.md), including Python with uv and the Textual/pyelftools stack, on 2026-09-15. No product-design questions remain open.
 
 ### Implementation language clarification
 
 The user requested Python, then explicitly specified Python with uv. Adopt Python CLI package distribution through uv. This replaces the unaccepted Rust proposal and the earlier native single-executable packaging direction. Preserve minimal external-tool dependencies and the subprocess metadata boundary.
 
-## Pending fact discovery
+## Implementation follow-ups within the accepted design
 
 - Compatibility of the inspected output with other installed versions.
 - Actual stopped-server failures and standalone database-opening effects.
@@ -129,7 +129,7 @@ Q16 accepted a bounded executable prototype of installed-library metadata extrac
 
 ## Interview checkpoint
 
-Rounds one through four answered, Q16 prototype completed, Q17 compatibility policy accepted, Python with uv selected. Consolidated design is ready for final review. No production implementation has started.
+Rounds one through four answered, Q16 prototype completed, Q17 compatibility policy accepted, Python with uv selected, and consolidated design explicitly confirmed. Design work is complete. The remaining implementation and verification work is described in design.md; no production implementation has started.
 
 ## References supplied by the user
 

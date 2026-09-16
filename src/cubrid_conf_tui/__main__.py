@@ -8,7 +8,10 @@ from .app import ConfigurationApp
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Edit [common] with live discovery or limited offline mode."
+        description=(
+            "Use a supported offline catalog or live discovery; limited offline "
+            "mode remains available."
+        )
     )
     parser.add_argument(
         "database",

@@ -1,9 +1,12 @@
 # cubrid-conf-tui
 
-A Linux terminal editor for CUBRID `[common]` settings. Select a database for
-ordinary and hidden live parameter discovery, or use **limited offline editing**
-of existing assignments. Live dumps show role-specific current/default values;
-types, constraints and activation requirements remain unavailable.
+A Linux terminal editor for CUBRID `[common]` settings. Supported installed
+artifacts provide an **offline catalog** of ordinary and hidden parameters before
+a database starts. Select a database to add live observations, or use **limited
+offline editing** of existing assignments when metadata is unsupported. Live
+dumps show role-specific current/default values; compiled metadata shows typed
+raw defaults and constraints without treating them as configuration text.
+Activation requirements and complete validation remain unavailable.
 A successful save changes the file only; it does not start a database or apply live values.
 
 ## Run
@@ -32,6 +35,32 @@ and selection. Removal retains the query and selects the next remaining row (or
 the previous row when removing the last result). After a conflict, exit and reopen to
 reload the file; copy any entered text you want to keep first.
 
+## Offline catalog
+
+At startup, a bounded child process inspects the server library named by the
+selected installation's `bin/cub_server`. The main application never loads or
+dereferences native parameter structures. The child admits only exact artifact
+identities whose private layout was previously validated, and checks the ELF
+architecture, build ID, exported registry size and server dependency before
+loading the library. Table size and consecutive IDs are only additional sanity
+checks. Unknown hashes, missing dependencies, malformed output, crashes and the
+10-second timeout return to an explicitly limited existing-settings editor.
+
+The current compatibility set is the preserved 64-bit Linux server artifacts
+from CUBRID `11.5.0.2585-c2492f8` debug and `11.5.0.2546-481d26c` release.
+Compatibility is intentionally exact, not inferred from a similar version or
+table shape. Each result displays the server-library identity, build mode and
+compatibility evidence. CPU-derived bounds/defaults are attributed to the helper
+environment. The helper reads compiled default and constraint fields, never the
+uninitialized current registry field.
+
+Obsolete entries are excluded from the available catalog. A known obsolete
+assignment already in `[common]` remains visible and removable but cannot be
+resaved. Section-qualified entries and `stored_procedure_port` are likewise
+read-only for common insertion. Raw keyword IDs, sentinels, units and callbacks
+are not converted into editable defaults or authoritative validation rules;
+entered values continue through limited validation and the protected writer.
+
 ## Database discovery
 
 An explicit database name selects the observation target. When omitted, registry
@@ -48,12 +77,13 @@ produce explicit incomplete discovery. Valid records survive partial failures;
 missing roles remain unavailable. Supported compatibility and reproducible
 isolated-database checks are recorded in [ticket 03](docs/implementation/ticket-03.md).
 
-One row combines client and server observations. The editor distinguishes an
-absent common assignment, explicit configured text, role defaults and `*` default
-differences. Database overrides are read-only; displayed `CUBRID_<PARAMETER>` values
+One row combines offline metadata with client and server observations. The editor
+distinguishes an absent common assignment, explicit configured text, compiled raw
+defaults, role observations and `*` default differences. Database overrides are read-only; displayed `CUBRID_<PARAMETER>` values
 come from the TUI environment, not an observed server environment. Saving updates
 configured state only. Observations change on refresh, never as a side effect of
-saving. No native library is loaded, server started, or standalone fallback used.
+saving. No native library is loaded in the UI process, and no server is started
+or standalone fallback used.
 
 ## Supported documents and save behavior
 
@@ -99,15 +129,18 @@ uv run mypy
 uv run ruff check src tests
 uv run ruff format --check src tests
 uv run pytest
+
+# Developer-only, source-hidden real debug/release contract
+uv run python docs/verification/probe_offline_catalog.py DEBUG_CUBRID RELEASE_CUBRID
 ```
 
 Principal tests run the complete Textual application with keyboard input and real
 temporary configuration and backup files, following the approved boundary in the
 specification and [Textual's testing guide](https://textual.textualize.io/guide/testing/).
-Filesystem faults are injected only at OS boundaries. CLI tests run actual uv
+Filesystem and helper faults are injected only at OS/process boundaries. CLI tests run actual uv
 processes. Tests never edit an active developer configuration or start a database.
 
 The [design](docs/design.md), [glossary](CONTEXT.md), and
-[metadata ADR](docs/adr/0001-installed-library-metadata.md) describe subsequent slices.
-Metadata extraction and typed validation remain future work. The pyelftools dependency reserves the accepted
-stack; no native libraries are loaded by the application.
+[metadata ADR](docs/adr/0001-installed-library-metadata.md) define the integration
+boundary. `pyelftools` and `ctypes` run in the metadata child; bubblewrap and
+strace are verification tools only and are not ordinary runtime requirements.

@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .metadata import MetadataEntry
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -20,11 +22,16 @@ class Observation:
 class Parameter:
     name: str
     observations: dict[str, Observation] = field(default_factory=dict)
+    metadata: MetadataEntry | None = None
 
     @property
     def common_supported(self) -> bool:
         # system_parameter.c rejects this parameter in common (see discovery docs).
-        return "::" not in self.name and self.name.lower() != "stored_procedure_port"
+        return (
+            "::" not in self.name
+            and self.name.lower() != "stored_procedure_port"
+            and not (self.metadata and self.metadata.obsolete)
+        )
 
 
 @dataclass

@@ -41,25 +41,35 @@ The checked-in captures under `tests/fixtures/live/` come from a private copied
 installation and isolated `tui_probe` database. Temporary absolute paths are
 redacted. They are artifact-specific captures, not a universal parameter count.
 
-Reproduce the real-process contract from the repository root on Linux with
-unprivileged namespaces enabled (requires `unshare` and `ip` for this developer
-experiment only):
+> **Safety correction (2026-09-16):** Do not use the former `unshare --user
+> --net --ipc --pid --mount-proc` recipe. Those namespaces did not isolate
+> pathname sockets in the host-mounted `/tmp`. Because the old probe omitted
+> `CUBRID_TMP` and retained `cubrid_port_id=1523`, its `tui_probe` server
+> registered with the host master through `/tmp/CUBRID1523`. Deletion of the
+> copied installation then exposed a separate CUBRID failed-revival defect and
+> triggered a host fork storm.
 
-```sh
-unshare --user --map-root-user --net --ipc --pid --fork --mount-proc \
-  sh -c 'ip link set lo up && exec .venv/bin/python \
-    docs/verification/probe_live_dump.py "$CUBRID" tests/fixtures/live'
-```
+The repaired probe creates a unique `CUBRID_TMP`, selects a per-run master port,
+rejects shared, outside-root, and pre-existing master endpoints, verifies that the
+copied master remains alive and creates the expected private socket before starting
+the server, and owns bounded cleanup for both processes on every exit path. Normal
+tests exercise these contracts with fake processes and harmless private Unix sockets;
+they never start CUBRID.
 
-The probe refuses execution unless it is PID 1, copies installation artifacts,
-uses private configuration/registry/storage and namespaces, starts only its isolated
-test database, runs the complete app against it, then verifies stopped-server
-fallback. Exiting the PID namespace removes residual test processes. Normal tests
-use preserved captures and controlled executable responses; they never start a DB.
+Run the real-process probe only in a disposable VM or container with an independently
+verified private endpoint and a strict PID limit. The old namespace recipe is not an
+acceptable containment boundary. No host-side reproduction command is provided.
 
 ## Validation
 
-Final combined suite: `uv run pytest -q` — **99 passed** (44.25 seconds).
+Post-incident safety repair (2026-09-16): `uv run pytest -q` — **158 passed**;
+the focused probe-safety module reports **10 passed**. Strict mypy, Ruff
+lint/format, and diff whitespace checks pass. The real-process probe was
+deliberately not rerun on the host; its preserved installed-output evidence below
+predates the safety correction.
+
+Original ticket-03 combined suite: `uv run pytest -q` — **99 passed**
+(44.25 seconds).
 
 - Full-app discovery coverage includes ordinary/hidden merge, overlapping roles,
   explicit defaults, absent/empty values, quoted parentheses, hidden insertion and

@@ -29,6 +29,28 @@ PARAMETER_TYPES = (
     "integer_list",
     "no_type",
 )
+PRM_SIZE_UNIT = 0x00001000
+PRM_TIME_UNIT = 0x00002000
+PRM_DIFFER_UNIT = 0x00004000
+# These CPU-derived initializers were checked in both exact supported revisions.
+HELPER_CPU_BOUNDS = {
+    "max_request_worker",
+    "max_request_concurrency",
+    "max_connection_worker",
+    "min_connection_worker",
+    "auto_scaling_window_size",
+}
+# These configuration spellings were also checked in both exact revisions. Unknown
+# keyword tables intentionally stay absent rather than exposing raw numeric IDs.
+KEYWORD_TABLES = {
+    "error_log_level": (
+        ("fatal", 0),
+        ("error", 1),
+        ("syntax", 2),
+        ("warning", 3),
+        ("notification", 4),
+    )
+}
 
 
 @dataclass(frozen=True)
@@ -235,6 +257,25 @@ def _raw(value: ParameterValue, type_id: int) -> dict[str, object]:
     return {"state": "value", "value": raw}
 
 
+def _semantics(name: str, flags: int) -> dict[str, object]:
+    unit = "none"
+    if flags & PRM_SIZE_UNIT:
+        unit = "size"
+    elif flags & PRM_TIME_UNIT:
+        unit = "time"
+    keywords = KEYWORD_TABLES.get(name)
+    return {
+        "unit": unit,
+        "unit_adjusted": bool(flags & PRM_DIFFER_UNIT),
+        "bounds_source": "helper_cpu" if name in HELPER_CPU_BOUNDS else "static",
+        "keywords": (
+            [{"text": keyword, "value": value} for keyword, value in keywords]
+            if keywords
+            else None
+        ),
+    }
+
+
 def extract(root: Path) -> dict[str, object]:
     library, digest, supported, symbol_size, artifact_stream = inspect_artifact(root)
     # No native object is loaded until every exact-identity and ELF check above passes.
@@ -273,6 +314,7 @@ def extract(root: Path) -> dict[str, object]:
                     "has_custom_callbacks": bool(
                         parameter.set_dup or parameter.get_dup
                     ),
+                    "semantics": _semantics(name, parameter.flags),
                 }
             )
     finally:

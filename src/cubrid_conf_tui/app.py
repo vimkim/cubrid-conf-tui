@@ -21,6 +21,16 @@ from .document import (
     validate_value,
 )
 from .metadata import MetadataCatalog, discover_metadata
+from .validation import (
+    configuration_default_text,
+    configuration_text_description,
+    describe_assignment,
+    parse_boolean_text,
+    replace_scalar_preserving_quotes,
+    unquote_configuration_text,
+    validate_configuration_value,
+    validation_description,
+)
 
 
 class ValueInput(Input):
@@ -39,6 +49,7 @@ class ValueEditor(ModalScreen[str | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+r", "remove_override", "Remove override"),
+        Binding("space", "toggle_boolean", "Toggle", show=False),
     ]
 
     def __init__(
@@ -59,21 +70,33 @@ class ValueEditor(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         yield Static(f"{self.document.path} — [common] only", markup=False)
-        previous = self.assignment.value if self.assignment is not None else "<absent>"
+        metadata = self.parameter.metadata if self.parameter else None
+        previous = describe_assignment(
+            self.assignment.value if self.assignment is not None else None, metadata
+        )
         yield Static(
             f"{self.parameter_name}\nPrevious assignment: {previous}\n"
             f"{self.details}\n"
             + (
-                "Typed raw metadata available; configuration interpretation "
-                "unavailable\n"
-                if self.parameter and self.parameter.metadata
+                validation_description(metadata) + "\n"
+                if metadata
                 else "Type / constraints: unavailable\n"
             )
             + "Activation requirements: unavailable\nLimited validation",
             id="details",
             markup=False,
         )
-        yield ValueInput(self.assignment.value if self.assignment else "", id="value")
+        if self.is_boolean:
+            yield OptionList(
+                Option(Text("yes"), id="yes"),
+                Option(Text("no"), id="no"),
+                Option(Text("default"), id="default"),
+                id="boolean-values",
+            )
+        else:
+            yield ValueInput(
+                self.assignment.value if self.assignment else "", id="value"
+            )
         yield Static(
             "Enter saves • Ctrl+R removes override • Esc cancels",
             id="save-status",
@@ -82,11 +105,53 @@ class ValueEditor(ModalScreen[str | None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one(Input).focus()
+        if self.is_boolean:
+            selector = self.query_one("#boolean-values", OptionList)
+            selector.highlighted = self.initial_boolean_selection
+            selector.focus()
+        else:
+            self.query_one(Input).focus()
+
+    @property
+    def is_boolean(self) -> bool:
+        return bool(
+            self.parameter
+            and self.parameter.metadata
+            and self.parameter.metadata.type_name == "boolean"
+        )
+
+    @property
+    def initial_boolean_selection(self) -> int | None:
+        if self.assignment:
+            scalar, _ = unquote_configuration_text(self.assignment.value)
+            scalar = scalar.lower()
+            if scalar == "default":
+                return 2
+            parsed = parse_boolean_text(self.assignment.value)
+            if parsed is not None:
+                return 0 if parsed else 1
+            return None
+        metadata = self.parameter.metadata if self.parameter else None
+        default_text = configuration_default_text(metadata) if metadata else None
+        default = parse_boolean_text(default_text) if default_text else None
+        if default is None:
+            return None
+        return 0 if default else 1
 
     @on(Input.Submitted, "#value")
     def save_value(self) -> None:
+        self._save(self.query_one(Input).value)
+
+    @on(OptionList.OptionSelected, "#boolean-values")
+    def save_boolean(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option.id is not None:
+            original = self.assignment.value if self.assignment else None
+            self._save(replace_scalar_preserving_quotes(original, event.option.id))
+
+    def _save(self, value: str) -> None:
         try:
+            validate_value(value)
             parameter = (
                 self.parameter_lookup(self.parameter_name)
                 if self.parameter_lookup
@@ -101,15 +166,35 @@ class ValueEditor(ModalScreen[str | None]):
                 raise ConfigurationError(
                     f"Parameter is {reason}; removal remains available."
                 )
+            outcome = (
+                validate_configuration_value(parameter.metadata, value)
+                if parameter and parameter.metadata
+                else None
+            )
             message = self.document.save(
                 self.parameter_name,
-                self.query_one(Input).value,
+                value,
                 allow_insert=parameter is not None and parameter.common_supported,
+            )
+            limitations = (
+                outcome.limitations
+                if outcome
+                else ("type and parameter constraints are unavailable",)
+            )
+            message += (
+                " Limited validation: "
+                + "; ".join(limitations)
+                + ". A saved value does not prove CUBRID startup acceptance."
             )
         except (ConfigurationError, OSError, UnicodeError) as error:
             self.query_one("#save-status", Static).update(str(error))
         else:
             self.dismiss(message)
+
+    def action_toggle_boolean(self) -> None:
+        if self.is_boolean:
+            selector = self.query_one("#boolean-values", OptionList)
+            selector.highlighted = 1 if selector.highlighted == 0 else 0
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -385,7 +470,7 @@ class ConfigurationApp(App[None]):
                     f"{metadata.default.display()}",
                     f"Raw lower constraint: {metadata.lower.display()}",
                     f"Raw upper constraint: {metadata.upper.display()}",
-                    "Configuration text: unavailable from raw metadata",
+                    configuration_text_description(metadata),
                     metadata.provenance.cpu_derived,
                     f"Artifact: {metadata.provenance.artifact.path} • "
                     f"{metadata.provenance.artifact.role} • "

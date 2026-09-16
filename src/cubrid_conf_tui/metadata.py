@@ -72,6 +72,20 @@ class MetadataProvenance:
 
 
 @dataclass(frozen=True)
+class Keyword:
+    text: str
+    value: int
+
+
+@dataclass(frozen=True)
+class ConfigurationSemantics:
+    unit: str
+    unit_adjusted: bool
+    bounds_source: str
+    keywords: tuple[Keyword, ...] | None
+
+
+@dataclass(frozen=True)
 class MetadataEntry:
     name: str
     type_name: str
@@ -83,6 +97,7 @@ class MetadataEntry:
     lower: RawValue
     upper: RawValue
     has_custom_callbacks: bool
+    semantics: ConfigurationSemantics
     provenance: MetadataProvenance
 
 
@@ -133,6 +148,60 @@ def _integer(value: object, label: str, minimum: int, maximum: int) -> int:
     ):
         raise InvalidMetadata(f"{label} must be an integer in range")
     return value
+
+
+def _semantics(value: object, type_name: str) -> ConfigurationSemantics:
+    item = _mapping(value, "parameter.semantics")
+    _keys(
+        item,
+        {"unit", "unit_adjusted", "bounds_source", "keywords"},
+        "parameter.semantics",
+    )
+    unit = _string(item.get("unit"), "parameter.semantics.unit")
+    if unit not in {"none", "size", "time"}:
+        raise InvalidMetadata("parameter semantics unit is unsupported")
+    if unit != "none" and type_name not in {"integer", "bigint", "float"}:
+        raise InvalidMetadata("parameter unit does not match its type")
+    unit_adjusted = _boolean(
+        item.get("unit_adjusted"), "parameter.semantics.unit_adjusted"
+    )
+    bounds_source = _string(
+        item.get("bounds_source"), "parameter.semantics.bounds_source"
+    )
+    if bounds_source not in {"static", "helper_cpu"}:
+        raise InvalidMetadata("parameter bounds source is unsupported")
+    if bounds_source == "helper_cpu" and type_name != "integer":
+        raise InvalidMetadata("helper-CPU bounds do not match the parameter type")
+    raw_keywords = item.get("keywords")
+    keywords: tuple[Keyword, ...] | None = None
+    if raw_keywords is not None:
+        if type_name != "keyword" or not isinstance(raw_keywords, list):
+            raise InvalidMetadata("parameter keywords are invalid")
+        parsed: list[Keyword] = []
+        texts: set[str] = set()
+        for raw_keyword in raw_keywords:
+            keyword = _mapping(raw_keyword, "parameter keyword")
+            _keys(keyword, {"text", "value"}, "parameter keyword")
+            keyword_text = _string(keyword.get("text"), "parameter keyword text")
+            identity = keyword_text.lower()
+            if identity in texts:
+                raise InvalidMetadata("parameter keyword is duplicated")
+            texts.add(identity)
+            parsed.append(
+                Keyword(
+                    keyword_text,
+                    _integer(
+                        keyword.get("value"),
+                        "parameter keyword value",
+                        -(2**31),
+                        2**31 - 1,
+                    ),
+                )
+            )
+        if not parsed:
+            raise InvalidMetadata("parameter keywords are empty")
+        keywords = tuple(parsed)
+    return ConfigurationSemantics(unit, unit_adjusted, bounds_source, keywords)
 
 
 def _raw_value(value: object, type_name: str, label: str) -> RawValue:
@@ -296,6 +365,7 @@ def parse_response(data: bytes, root: Path) -> MetadataCatalog:
                 "lower",
                 "upper",
                 "has_custom_callbacks",
+                "semantics",
             },
             f"parameter {expected_id}",
         )
@@ -329,6 +399,7 @@ def parse_response(data: bytes, root: Path) -> MetadataCatalog:
                 parameter.get("has_custom_callbacks"),
                 "parameter.has_custom_callbacks",
             ),
+            semantics=_semantics(parameter.get("semantics"), type_name),
             provenance=provenance,
         )
         parameters[identity] = entry

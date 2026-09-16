@@ -215,6 +215,41 @@ def probe(
         "state": "value",
         "value": expected.er_log_debug,
     }
+    error_level = find_parameter(payload, "error_log_level")
+    assert error_level["semantics"] == {
+        "unit": "none",
+        "unit_adjusted": False,
+        "bounds_source": "static",
+        "keywords": [
+            {"text": "fatal", "value": 0},
+            {"text": "error", "value": 1},
+            {"text": "syntax", "value": 2},
+            {"text": "warning", "value": 3},
+            {"text": "notification", "value": 4},
+        ],
+    }
+    audit_size = find_parameter(payload, "ddl_audit_log_size")
+    assert audit_size["semantics"] == {
+        "unit": "size",
+        "unit_adjusted": False,
+        "bounds_source": "static",
+        "keywords": None,
+    }
+    assert audit_size["client"] is True
+    assert audit_size["server"] is False
+    thread_stack = find_parameter(payload, "thread_stacksize")
+    assert thread_stack["semantics"] == {
+        "unit": "size",
+        "unit_adjusted": False,
+        "bounds_source": "static",
+        "keywords": None,
+    }
+    assert thread_stack["client"] is False
+    assert thread_stack["server"] is True
+    assert thread_stack["lower"] == {"state": "value", "value": 65536}
+    assert thread_stack["upper"] == {"state": "value", "value": 2147483647}
+    connection_worker = find_parameter(payload, "max_connection_worker")
+    assert connection_worker["semantics"]["bounds_source"] == "helper_cpu"
     effects = verify_trace(trace.read_text(), repository.parent)
     capture = {
         "artifact": artifact,
@@ -242,6 +277,12 @@ def probe(
         "independent_values": {
             "enable_pgbuf_inspector": pgbuf["default"],
             "er_log_debug": er_debug["default"],
+        },
+        "configuration_semantics": {
+            "error_log_level": error_level["semantics"],
+            "ddl_audit_log_size": audit_size["semantics"],
+            "thread_stacksize": thread_stack["semantics"],
+            "max_connection_worker": connection_worker["semantics"],
         },
         "observed_effects": effects,
     }
@@ -320,10 +361,42 @@ async def probe_full_app(installation: Path, expected: Expected) -> dict[str, ob
             details = str(app.screen.query_one("#details", Static).content)
             assert "Raw compiled default (boolean): false" in details
             assert f"server • {expected.mode}" in details
-            await pilot.press("y", "e", "s", "enter")
+            await pilot.press("space", "enter")
             assert target.read_bytes() == original + b"enable_pgbuf_inspector=yes\n"
             assert target.with_suffix(".conf.bak").read_bytes() == original
-        return {"mode": mode, "catalog_rows": count, "details": details}
+
+            for name, value in (
+                ("error_log_level", "warning"),
+                ("thread_stacksize", "1M"),
+                ("ddl_audit_log_size", "9M"),
+                ("max_connection_worker", "999"),
+            ):
+                app.query_one("#search", Input).value = name
+                await pilot.pause()
+                await pilot.press("enter")
+                editor_details = str(app.screen.query_one("#details", Static).content)
+                if name == "thread_stacksize":
+                    assert "from 65536 to 2147483647 bytes" in editor_details
+                if name == "ddl_audit_log_size":
+                    assert "different or shared artifact role" in editor_details
+                    assert "at least 10485760 bytes" not in editor_details
+                app.screen.query_one("#value", Input).value = value
+                await pilot.press("enter")
+            final = target.read_text()
+            assert "error_log_level=warning" in final
+            assert "thread_stacksize=1M" in final
+            assert "ddl_audit_log_size=9M" in final
+            assert "max_connection_worker=999" in final
+            status = str(app.query_one("#status", Static).content)
+            assert "helper CPU bounds are displayed but not enforced" in status
+            assert "startup acceptance" in status
+        return {
+            "mode": mode,
+            "catalog_rows": count,
+            "boolean_details": details,
+            "typed_saved_text": final,
+            "limited_validation_status": status,
+        }
 
 
 def main() -> None:

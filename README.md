@@ -4,9 +4,10 @@ A Linux terminal editor for CUBRID `[common]` settings. Supported installed
 artifacts provide an **offline catalog** of ordinary and hidden parameters before
 a database starts. Select a database to add live observations, or use **limited
 offline editing** of existing assignments when metadata is unsupported. Live
-dumps show role-specific current/default values; compiled metadata shows typed
-raw defaults and constraints without treating them as configuration text.
-Activation requirements and complete validation remain unavailable.
+dumps show role-specific current/default values. Validated compiled metadata
+drives boolean controls and conservative typed validation where configuration-text
+semantics are established; unavailable rules remain visibly limited.
+Activation requirements and complete startup validation remain unavailable.
 A successful save changes the file only; it does not start a database or apply live values.
 
 ## Run
@@ -29,11 +30,13 @@ A nonempty `CUBRID_CONF_FILE` selects an alternate target; otherwise the target 
 The full target and common-only scope are displayed while browsing and editing.
 
 Type a fuzzy query, press Enter to edit, or Tab to move to the results and use arrows
-to select a row. Enter saves the text value; Ctrl+R in the editor removes the
-common override; Esc cancels. Ctrl+Q quits. Saving and cancelling retain the query
-and selection. Removal retains the query and selects the next remaining row (or
-the previous row when removing the last result). After a conflict, exit and reopen to
-reload the file; copy any entered text you want to keep first.
+to select a row. Known booleans open a yes/no/default selector; arrows change the
+selection, Space toggles yes/no, and Enter saves it. Other values use text input.
+Ctrl+R in the editor removes the common override; Esc cancels. Ctrl+Q quits. Saving
+and cancelling retain
+the query and selection. Removal retains the query and selects the next remaining row
+(or the previous row when removing the last result). After a conflict, exit and reopen
+to reload the file; copy any entered text you want to keep first.
 
 ## Offline catalog
 
@@ -52,14 +55,28 @@ Compatibility is intentionally exact, not inferred from a similar version or
 table shape. Each result displays the server-library identity, build mode and
 compatibility evidence. CPU-derived bounds/defaults are attributed to the helper
 environment. The helper reads compiled default and constraint fields, never the
-uninitialized current registry field.
+uninitialized current registry field. It also emits bounded semantic evidence for
+unit flags, explicitly identified helper-CPU bounds, and keyword tables established
+for the supported artifacts.
 
 Obsolete entries are excluded from the available catalog. A known obsolete
 assignment already in `[common]` remains visible and removable but cannot be
 resaved. Section-qualified entries and `stored_procedure_port` are likewise
-read-only for common insertion. Raw keyword IDs, sentinels, units and callbacks
-are not converted into editable defaults or authoritative validation rules;
-entered values continue through limited validation and the protected writer.
+read-only for common insertion. Known booleans expose `yes`, `no`, and the
+explicit `default` sentinel. Ordinary integer/float/string/list syntax, the
+verified `error_log_level` keyword table, and established size/time spellings
+receive typed validation. Static ranges are enforced only when raw bounds use the
+same unit and belong exclusively to the validated artifact role. Client-only or
+shared-role bounds from the supported server artifact remain visible but are not
+enforced. Their raw defaults do not preselect a concrete boolean or appear as
+universal configuration text. Raw unknown keyword IDs, adjusted-unit bounds,
+helper-CPU worker bounds, callbacks and cross-parameter rules are never promoted
+to universal validation rules; saves identify those gaps and do not claim that
+CUBRID startup will accept the value.
+
+The editor labels absent assignments, empty text, boolean false, numeric zero,
+`null` and `default` sentinels separately. Writing `default` is an explicit file
+assignment; it is not the same operation as Ctrl+R removal.
 
 ## Database discovery
 
@@ -94,8 +111,12 @@ the last common value, and editing changes only that last occurrence, retaining
 its spelling. Ctrl+R removes every common occurrence of that parameter, allowing
 inheritance; it does not write an explicit default. It retains
 unrelated text, comments, database sections, line endings, permissions and ownership.
-Quoted values retain their quote spelling. Enter quoted text for values containing
-`#` or `;`. Unknown types always use text input, even when the old value is `yes` or `no`.
+Quoted values retain their quote spelling. Typed validation interprets one complete
+pair of surrounding single or double quotes and trims inner edge spaces/tabs as the
+supported CUBRID parser does, while preserving the raw bytes on an unchanged save.
+Boolean selector changes retain the quote style and inner edge whitespace. Enter
+quoted text for values containing `#` or `;`. Unknown types always use text input,
+even when the old value is `yes` or `no`.
 
 Continuation lines, malformed syntax,
 control characters and lines longer than 510 bytes are rejected. Symlinks anywhere

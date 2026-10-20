@@ -18,10 +18,14 @@ uv run cubrid-conf-tui
 # Or select a database explicitly:
 uv run cubrid-conf-tui demodb
 
-# Install the CLI into an isolated tool environment
-uv tool install .
+# Install or refresh the global CLI in an isolated tool environment
+just sync
 cubrid-conf-tui
 ```
+
+`just sync` installs an independent copy of this checkout with `uv`; run it again
+after changing or updating the source. The personal `daily-update-cubrid` command
+runs this recipe as part of its CUBRID tooling update.
 
 The selected installation must have a working `bin/cubrid --version` (five-second
 prerequisite timeout). The application never substitutes a CUBRID executable from PATH.

@@ -147,6 +147,14 @@ An abruptly terminated process cannot display a notification; inspect the target
 and `.bak` after reopening. Staged `.cubrid.conf.*` files can remain after such a
 termination.
 
+## TODO
+
+- [ ] Support editing `[standalone]` and `[@DATABASE]` sections alongside
+  `[common]`. This is required to cover the broader section-editing workflows of
+  the deprecated [cubrid-ini-fzf](https://github.com/vimkim/cubrid-ini-fzf).
+  Include explicit section selection, section-aware validation and override
+  removal, while preserving unrelated sections and the existing save guarantees.
+
 ## Development checks
 
 ```sh
